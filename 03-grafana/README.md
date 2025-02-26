@@ -2,6 +2,18 @@
 ## Summary
 I wanted to receive a push notification on my mobile phone whenever someone joined the server. I over-engineered the solution and ended up with great monitoring & performance insights using Grafana Cloud.
 
+## Contents
+1. [Grafana Cloud](#grafana-cloud)
+2. [Cloud endpoints & APIs](#cloud-endpoints--apis)
+3. [Prometheus Exporter for Minecraft](#prometheus-exporter-for-minecraft)
+4. [Alloy agent](#alloy-agent)
+5. [Dashboards](#dashboards)
+6. [Contact points](#contact-points)
+7. [Notification policies](#notification-policies)
+8. [Alert rules](#alert-rules)
+9. [OnCall notifications](#oncall-notifications)
+10. [IRM Mobile App](#irm-mobile-app)
+
 ## Install Guide
 ### Grafana Cloud
 - Sign-up to the free tier of Grafana Cloud: https://grafana.com/products/cloud/
@@ -52,7 +64,7 @@ I wanted to receive a push notification on my mobile phone whenever someone join
   ![exporter-config](minecraft-prometheus-exporter-config.png)
 
 
-### Grafana Alloy
+### Alloy agent
 Refer: https://grafana.com/docs/alloy/latest/tutorials/send-logs-to-loki/
 
 - SSH to the server
@@ -186,7 +198,7 @@ Refer: https://grafana.com/docs/alloy/latest/tutorials/send-logs-to-loki/
   - Minecraft Server: https://grafana.com/grafana/dashboards/16508-minecraft-server-stats/
   - Ubuntu Host/Node: https://grafana.com/grafana/dashboards/1860-node-exporter-full/
 
-### Create Contact points
+### Contact points
 - Open Grafana
 - Navigate to Alerting > Contact Points
 - Create #1
@@ -204,7 +216,7 @@ Refer: https://grafana.com/docs/alloy/latest/tutorials/send-logs-to-loki/
   - Integration: Grafana OnCall
   - Integration Name: IRM 03 Metrics
 
-### Create Notification policies
+### Notification policies
 - Navigate to Alerting > Notification Policies
 - Under Default, create new child policy
 - Policy #1
@@ -223,7 +235,7 @@ Refer: https://grafana.com/docs/alloy/latest/tutorials/send-logs-to-loki/
   - Value: Metrics
   - Contact Point: IRM 03
 
-### Create Alert rules
+### Alert rules
 - Navigate to Alerting > Alert rules
 - New
   - #1 Name: Player Event - Joined
@@ -243,15 +255,14 @@ Refer: https://grafana.com/docs/alloy/latest/tutorials/send-logs-to-loki/
     - Alert state if no data = Normal
   - #5 Notifications
     - Contact Point: IRM 01 Player Events
+- Repeat for the x3 other logging alerts:
 
-- Repeat for logging alerts
-
-| Name                  | Query                | Contact Point |
-|-----------------------|----------------------|---------------|
-| Player Event - Joined | sum by (player)(count_over_time({service_name=\`minecraft01\`} \|= \`joined the game\` \| pattern \`\<time\> \[\<server\>\/\<level\>\]: \<player\> <_>` \[1m\])) | IRM 01 |
-| Player Event - Left | sum by (player)(count_over_time({service_name=\`minecraft01\`} \|= \`left the game\` \| pattern \`\<time\> \[\<server\>\/\<level\>\]: \<player\> <_>` \[1m\])) | IRM 01 |
-| Server Event - Started | sum by (message)(count_over_time({service_name=\`minecraft01\`} \|= \`Starting minecraft server version\` \| pattern \`\<message\>\` \[1m\])) | IRM 02 |
-| Server Event - Stopping | sum by (message)(count_over_time({service_name=\`minecraft01\`} \|= \`Stopping the server\` \| pattern \`\<message\>\` \[1m\])) | IRM 02 |
+| Name                  | Query                | Verb Label | Contact Point |
+|-----------------------|----------------------|------|---------|
+| Player Event - Joined | sum by (player)(count_over_time({service_name=\`minecraft01\`} \|= \`joined the game\` \| pattern \`\<time\> \[\<server\>\/\<level\>\]: \<player\> <_>` \[1m\])) | joined the game | IRM 01 |
+| Player Event - Left | sum by (player)(count_over_time({service_name=\`minecraft01\`} \|= \`left the game\` \| pattern \`\<time\> \[\<server\>\/\<level\>\]: \<player\> <_>` \[1m\])) | left the game | IRM 01 |
+| Server Event - Started | sum by (message)(count_over_time({service_name=\`minecraft01\`} \|= \`Starting minecraft server version\` \| pattern \`\<message\>\` \[1m\])) | started | IRM 02 |
+| Server Event - Stopping | sum by (message)(count_over_time({service_name=\`minecraft01\`} \|= \`Stopping the server\` \| pattern \`\<message\>\` \[1m\])) | stopping | IRM 02 |
 
 - Configure metric alert
   - #1 Name: Metrics - Down Detection
@@ -266,9 +277,73 @@ Refer: https://grafana.com/docs/alloy/latest/tutorials/send-logs-to-loki/
   - #5 Notifications
     - Contact Point: IRM 03 Metrics
 
-### Create OnCall notifications
-- 
+### OnCall notifications
+- Create Schedule
+  - Add yourself to 24x7 on-call schedule
+- Create Escalation Chain
+  - Chain 01
+    - #1 "Notify users from on-call schedule" >> assign to Default(no team)
+    - #2 Add “Resolve alert group automatically”
+  - Chain 02 
+    - #1 "Notify users from on-call schedule" >> assign to Default(no team)
+- In Integrations
+  - Edit each to add default route to corresponding chain
+    - IRM 01 & IRM 02 = Chain 01 (auto-resolves)
+    - IRM 03 = Chain 02
+  - Edit template for IRM 01
+    - Web & Mobile Title:
+      ```
+      {% if payload.numFiring > 1 -%}
+      {{ payload.numFiring }} players {{ payload.get("commonLabels").get("verb") }}
+        {% for alert in payload.alerts -%}
+          {% for label, value in alert.labels.items() -%}
+          {% if label == "player" -%}
+        ({{ value }}){% endif -%}
+            {% endfor %}
+          {% endfor %}
+      {% else -%}
+        {{ payload.get("commonLabels").get("player") }} {{ payload.get("commonLabels").get("verb") }}{% endif -%}
+      ```
+    - Mobile Message Body
+      ```
+      {% if payload.numFiring > 1 -%}
+        {% for alert in payload.alerts -%}
+          {% for label, value in alert.labels.items() -%}
+            {% if label == "player" -%}
+      [{{ alert.get("startsAt") | iso8601_to_time | datetimeformat_as_timezone("%H:%M", "Australia/Brisbane") }}] {{ value }} {{ payload.commonLabels.verb }} {% endif -%}
+          {% endfor %}
+        {% endfor %}
+      {% else -%}
+      [{{ payload.alerts[0].startsAt | iso8601_to_time | datetimeformat_as_timezone("%H:%M", "Australia/Brisbane") }}] {{ payload.commonLabels.player }} {{ payload.commonLabels.verb }}
+      {% endif -%}
+      ```
+  - Edit template for IRM 02
+    - Web & Mobile Title:
+      ```
+      {% if payload.numFiring > 1 -%}
+        {{ payload.numFiring }} events for server {{ payload.get("commonLabels").get("verb") }}
+      {% else -%}
+      {% set message = payload.get("commonLabels").get("message") | regex_replace("\[\d{2}:\d{2}:\d{2}\] \[(.*)\]: *","") %}{{ message }}
+      {% endif -%}
+      ```
+    - Mobile Message Body
+      ```
+      {% if payload.numFiring > 1 -%}
+        {% for alert in payload.alerts -%}
+          {% for label, value in alert.labels.items() -%}
+            {% if label == "message" -%}
+      {% set message = payload.get("commonLabels").get("message") | regex_replace("\[\d{2}:\d{2}:\d{2}\] *","") %}[{{ alert.get("startsAt") | iso8601_to_time | datetimeformat_as_timezone("%H:%M%S", "Australia/Brisbane") }}] {{ message }}      {% endif -%}
+          {% endfor %}
+        {% endfor %}
+      {% else -%}
+      {% set message = payload.get("commonLabels").get("message") | regex_replace("\[\d{2}:\d{2}:\d{2}\] *","") %}[{{ payload.alerts[0].startsAt | iso8601_to_time | datetimeformat_as_timezone("%H:%M:%S", "Australia/Brisbane") }}] {{ message }} 
+      {% endif -%}
+      ```
 
+### IRM Mobile App
+- Download the Grafana IRM App: https://apps.apple.com/au/app/grafana-irm/id1669759048
+- Open the app and login
+- Set default notification rule: Mobile push
 
 ## References
 Thanks to the following inspiration:
